@@ -36,7 +36,7 @@ build_with_waf() {
 			$WAF_ENABLE_CROSS_COMPILE_ENV \
 			$WAF_CONFIGURE_OPTS \
 		install \
-			--destdir="$ROOT_DIR/stage_raw" || return 1
+			--destdir="$ROOT_DIR/stage" || return 1
 
 	return 0
 }
@@ -70,8 +70,6 @@ build_mod_source() {
 	rm -rf "$REPO_DIR"
 	git clone "$REPO_URL" "$REPO_DIR" || return 1
 
-	local DETECTED_GAMEDIR=""
-
 	pushd "$REPO_DIR" || return 1
 		git fetch origin "$BRANCH_NAME" || { popd; return 1; }
 		git checkout "$BRANCH_NAME" || { popd; return 1; }
@@ -88,11 +86,6 @@ build_mod_source() {
 				if [ "$CUSTOM_DIR" == "xenwar" ]; then
 					sed -i 's/XENWARRIOR=OFF/XENWARRIOR=ON/g' mod_options.txt
 				fi
-				DETECTED_GAMEDIR=$(grep GAMEDIR mod_options.txt | tr '=' ' ' | cut -d' ' -f2 )
-			fi
-
-			if [ -z "$DETECTED_GAMEDIR" ]; then
-				DETECTED_GAMEDIR="cof"
 			fi
 
 			if [ -n "$CUSTOM_DIR" ] && [ "$CUSTOM_DIR" != "null" ]; then
@@ -101,17 +94,12 @@ build_mod_source() {
 				OUTPUT_ZIP_NAME="${BRANCH_NAME}"
 			fi
 
-			rm -rf "$ROOT_DIR/stage_raw" "$ROOT_DIR/stage/$OUTPUT_ZIP_NAME"
+			rm -rf "$ROOT_DIR/stage"
 			
 			if [ -f "CMakeLists.txt" ]; then
 				build_with_cmake "$OUTPUT_ZIP_NAME"
 			else
-				build_with_waf "$DETECTED_GAMEDIR"
-				if [ -d "$ROOT_DIR/stage_raw/$DETECTED_GAMEDIR" ]; then
-					mkdir -p "$ROOT_DIR/stage"
-					mv "$ROOT_DIR/stage_raw/$DETECTED_GAMEDIR" "$ROOT_DIR/stage/$OUTPUT_ZIP_NAME"
-					rm -rf "$ROOT_DIR/stage_raw"
-				fi
+				build_with_waf
 			fi
 
 			SUCCESS=$?
@@ -131,20 +119,38 @@ build_mod_source() {
 		popd || return 1
 	popd || return 1
 
-	GAMEDIR="$OUTPUT_ZIP_NAME"
 	return 0
 }
 
 pack_staged_gamedir() {
+	local TARGET_NAME="$1"
+	local ARCH_TAG="$2"
+	
 	mkdir -p "$ROOT_DIR/out" || return 1
 
-	pushd "$ROOT_DIR/stage/" || return 1
-		if [ -d "$2" ]; then
-			7z a "$ROOT_DIR/out/$2-$3.zip" "$2" || return 2
-			rm -rf "$2"
-		fi
-	popd || return 1
+	if [ ! -d "$ROOT_DIR/stage" ]; then
+		return 1
+	fi
 
+	local REAL_GAME_PATH
+	REAL_GAME_PATH=$(find "$ROOT_DIR/stage" -type d -name "cl_dlls" -exec dirname {} \; | head -n 1)
+
+	if [ -z "$REAL_GAME_PATH" ]; then
+		REAL_GAME_PATH=$(find "$ROOT_DIR/stage" -type d -name "dlls" -exec dirname {} \; | head -n 1)
+	fi
+
+	if [ -n "$REAL_GAME_PATH" ] && [ -d "$REAL_GAME_PATH" ]; then
+		mkdir -p "$ROOT_DIR/stage_final"
+		rm -rf "$ROOT_DIR/stage_final/$TARGET_NAME"
+		mv "$REAL_GAME_PATH" "$ROOT_DIR/stage_final/$TARGET_NAME"
+		
+		pushd "$ROOT_DIR/stage_final/" || return 1
+			7z a "$ROOT_DIR/out/${TARGET_NAME}-${ARCH_TAG}.zip" "$TARGET_NAME" || return 2
+			rm -rf "$TARGET_NAME"
+		popd || return 1
+	fi
+
+	rm -rf "$ROOT_DIR/stage" "$ROOT_DIR/stage_final"
 	return 0
 }
 
@@ -152,8 +158,6 @@ for (( i = 0 ; i < MODS ; i++ )); do
 	REPO=$($YQ -r ".[$i].repo" "$MANIFEST_PATH")
 	BRANCH=$($YQ -r ".[$i].branch" "$MANIFEST_PATH")
 	TARGET_DIR=$($YQ -r ".[$i].dir" "$MANIFEST_PATH")
-	
-	GAMEDIR=""
 	
 	if [ -n "$TARGET_DIR" ] && [ "$TARGET_DIR" != "null" ]; then
 		OUTPUT_ZIP_NAME="${TARGET_DIR}"
@@ -168,5 +172,5 @@ for (( i = 0 ; i < MODS ; i++ )); do
 		continue
 	fi
 
-	pack_staged_gamedir "$GAMEDIR" "$OUTPUT_ZIP_NAME" "$GH_CPU_OS-$GH_CPU_ARCH"
+	pack_staged_gamedir "$OUTPUT_ZIP_NAME" "$GH_CPU_OS-$GH_CPU_ARCH"
 done
