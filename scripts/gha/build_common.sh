@@ -36,7 +36,7 @@ build_with_waf() {
 			$WAF_ENABLE_CROSS_COMPILE_ENV \
 			$WAF_CONFIGURE_OPTS \
 		install \
-			--destdir="$ROOT_DIR/stage" || return 1
+			--destdir="$ROOT_DIR/stage_raw" || return 1
 
 	return 0
 }
@@ -101,17 +101,20 @@ build_mod_source() {
 				OUTPUT_ZIP_NAME="${BRANCH_NAME}"
 			fi
 
+			rm -rf "$ROOT_DIR/stage_raw" "$ROOT_DIR/stage/$OUTPUT_ZIP_NAME"
+			
 			if [ -f "CMakeLists.txt" ]; then
-				build_with_cmake "$DETECTED_GAMEDIR"
+				build_with_cmake "$OUTPUT_ZIP_NAME"
 			else
 				build_with_waf "$DETECTED_GAMEDIR"
+				if [ -d "$ROOT_DIR/stage_raw/$DETECTED_GAMEDIR" ]; then
+					mkdir -p "$ROOT_DIR/stage"
+					mv "$ROOT_DIR/stage_raw/$DETECTED_GAMEDIR" "$ROOT_DIR/stage/$OUTPUT_ZIP_NAME"
+					rm -rf "$ROOT_DIR/stage_raw"
+				fi
 			fi
 
 			SUCCESS=$?
-
-			if [ "$SUCCESS" -eq 2 ]; then
-				rm -rf "$ROOT_DIR/stage/$DETECTED_GAMEDIR"
-			fi
 
 			if [ "$SUCCESS" -ne 0 ]; then
 				popd; popd; return 2
@@ -128,7 +131,7 @@ build_mod_source() {
 		popd || return 1
 	popd || return 1
 
-	GAMEDIR="$DETECTED_GAMEDIR"
+	GAMEDIR="$OUTPUT_ZIP_NAME"
 	return 0
 }
 
@@ -136,12 +139,10 @@ pack_staged_gamedir() {
 	mkdir -p "$ROOT_DIR/out" || return 1
 
 	pushd "$ROOT_DIR/stage/" || return 1
-		if [ "$1" != "$2" ] && [ -d "$1" ]; then
+		if [ -d "$2" ]; then
+			7z a "$ROOT_DIR/out/$2-$3.zip" "$2" || return 2
 			rm -rf "$2"
-			mv "$1" "$2"
 		fi
-		7z a "$ROOT_DIR/out/$2-$3.zip" "$2" || return 2
-		rm -rf "$2"
 	popd || return 1
 
 	return 0
