@@ -1,6 +1,6 @@
-# hlsdk-mega-build
+# hlsdk-other-builds
 
-This repository uses cron job to rebuild all known HLSDK branches and puts prebuilt binaries on GitHub releases where they could be accessed by anyone.
+This repository uses cron job to rebuild other known HLSDK branches and puts prebuilt binaries on GitHub releases where they could be accessed by anyone.
 
 ## Manifest
 

@@ -1,23 +1,28 @@
 #!/bin/bash
 
-# TODO: remove this hack, put yq in PATH
+ROOT_DIR="$(pwd)"
+MANIFEST_PATH="$ROOT_DIR/manifest.yml"
+
 if command -v yq > /dev/null 2>&1; then
 	YQ=yq
 else
 	YQ=./yq
 fi
 
-MODS=$($YQ length manifest.yml)
+if [ ! -f "$MANIFEST_PATH" ]; then
+	echo "error: manifest.yml not found at $MANIFEST_PATH" >&2
+	exit 1
+fi
 
-build_with_waf()
-{
+MODS=$($YQ length "$MANIFEST_PATH")
+
+build_with_waf() {
 	local WAF_ENABLE_VGUI_OPTION=''
 	local WAF_ENABLE_AMD64_OPTION=''
 
 	if [ "$GH_CPU_ARCH" == "amd64" ]; then
 		WAF_ENABLE_AMD64_OPTION="-8"
 	elif [ "$GH_CPU_ARCH" == "i386" ] && ( [ "$GH_CPU_OS" == "win32" ] || [ "$GH_CPU_OS" == "linux" ] || [ "$GH_CPU_OS" == "apple" ] ); then
-		# not all waf-based hlsdk trees have vgui support
 		python waf --help | grep 'enable-vgui' && WAF_ENABLE_VGUI_OPTION=--enable-vgui
 	fi
 
@@ -31,21 +36,17 @@ build_with_waf()
 			$WAF_ENABLE_CROSS_COMPILE_ENV \
 			$WAF_CONFIGURE_OPTS \
 		install \
-			--destdir=../stage || return 1
+			--destdir="$ROOT_DIR/stage" || return 1
 
 	return 0
 }
 
-build_with_cmake()
-{
-	# Android only for now
-
-	# remove CMake cache to start configuration from zero
+build_with_cmake() {
 	rm -rf build/CMakeCache.txt
 
 	cmake -B build -GNinja \
 		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_INSTALL_PREFIX=../stage \
+		-DCMAKE_INSTALL_PREFIX="$ROOT_DIR/stage/$1" \
 		$CMAKE_CONFIGURE_OPTS \
 		. || return 1
 
@@ -54,73 +55,117 @@ build_with_cmake()
 	return 0
 }
 
-build_hlsdk_portable_branch()
-{
-	# hlsdk-portable has mods in git branches
-	git checkout "$1" || return 1
-
-	# all hlsdk-portable branches have mod_options.txt file
-	GAMEDIR=$(grep GAMEDIR mod_options.txt | tr '=' ' ' | cut -d' ' -f2 )
-
-	if [ -z "$GAMEDIR" ]; then
-		echo "error: could not parse GAMEDIR from mod_options.txt for branch $1" >&2
-		return 1
-	fi
-
-	if [ "$USE_CMAKE" -eq 1 ]; then
-		build_with_cmake "$GAMEDIR"
+build_mod_source() {
+	local REPO_URL="$1"
+	local BRANCH_NAME="$2"
+	local CUSTOM_DIR="$3"
+	local REPO_DIR
+	
+	if [ -n "$CUSTOM_DIR" ] && [ "$CUSTOM_DIR" != "null" ]; then
+		REPO_DIR="$CUSTOM_DIR"
 	else
-		build_with_waf "$GAMEDIR"
+		REPO_DIR=$(basename "$REPO_URL" .git)
 	fi
 
-	SUCCESS=$?
+	rm -rf "$REPO_DIR"
+	git clone "$REPO_URL" "$REPO_DIR" || return 1
 
-	if [ "$SUCCESS" -eq 2 ]; then # means something went wrong during install phase
-		rm -rf "../stage/$GAMEDIR" # better cleanup
-	fi
+	local DETECTED_GAMEDIR=""
 
-	if [ "$SUCCESS" -ne 0 ]; then
-		return 2
-	fi
+	pushd "$REPO_DIR" || return 1
+		git fetch origin "$BRANCH_NAME" || { popd; return 1; }
+		git checkout "$BRANCH_NAME" || { popd; return 1; }
+		git pull origin "$BRANCH_NAME" 2>/dev/null
 
-	# write git metadata sidecar so the release job can build manifest.json.
-	# only written on a successful build so the manifest never references
-	# a (gamedir, platform) pair that has no corresponding zip.
-	mkdir -p ../out
-	printf '{"branch":"%s","commit":"%s","tree":"%s","url":"%s"}\n' \
-		"$1" \
-		"$(git rev-parse HEAD)" \
-		"$(git rev-parse HEAD^{tree})" \
-		"$(git remote get-url origin)" \
-		> "../out/gitinfo-${GAMEDIR}-${GH_CPU_OS}-${GH_CPU_ARCH}.json"
+		local WORK_DIR="."
+		if [[ "$REPO_URL" == *"cry-of-fear-src"* ]]; then
+			WORK_DIR="src/cof"
+		fi
 
+		pushd "$WORK_DIR" || { popd; return 1; }
+
+			if [ -f "mod_options.txt" ]; then
+				if [ "$CUSTOM_DIR" == "xenwar" ]; then
+					sed -i 's/XENWARRIOR=OFF/XENWARRIOR=ON/g' mod_options.txt
+				fi
+				DETECTED_GAMEDIR=$(grep GAMEDIR mod_options.txt | tr '=' ' ' | cut -d' ' -f2 )
+			fi
+
+			if [ -z "$DETECTED_GAMEDIR" ]; then
+				DETECTED_GAMEDIR="cof"
+			fi
+
+			if [ -n "$CUSTOM_DIR" ] && [ "$CUSTOM_DIR" != "null" ]; then
+				OUTPUT_ZIP_NAME="${CUSTOM_DIR}"
+			else
+				OUTPUT_ZIP_NAME="${BRANCH_NAME}"
+			fi
+
+			if [ -f "CMakeLists.txt" ]; then
+				build_with_cmake "$DETECTED_GAMEDIR"
+			else
+				build_with_waf "$DETECTED_GAMEDIR"
+			fi
+
+			SUCCESS=$?
+
+			if [ "$SUCCESS" -eq 2 ]; then
+				rm -rf "$ROOT_DIR/stage/$DETECTED_GAMEDIR"
+			fi
+
+			if [ "$SUCCESS" -ne 0 ]; then
+				popd; popd; return 2
+			fi
+
+			mkdir -p "$ROOT_DIR/out"
+			printf '{"branch":"%s","commit":"%s","tree":"%s","url":"%s"}\n' \
+				"$BRANCH_NAME" \
+				"$(git rev-parse HEAD)" \
+				"$(git rev-parse HEAD^{tree})" \
+				"$(git remote get-url origin)" \
+				> "$ROOT_DIR/out/gitinfo-${OUTPUT_ZIP_NAME}-${GH_CPU_OS}-${GH_CPU_ARCH}.json"
+
+		popd || return 1
+	popd || return 1
+
+	GAMEDIR="$DETECTED_GAMEDIR"
 	return 0
 }
 
-pack_staged_gamedir()
-{
-	mkdir -p out || return 1
+pack_staged_gamedir() {
+	mkdir -p "$ROOT_DIR/out" || return 1
 
-	pushd stage/ || return 1
-		7z a "../out/$1-$2.zip" "$1" || return 2
+	pushd "$ROOT_DIR/stage/" || return 1
+		if [ "$1" != "$2" ] && [ -d "$1" ]; then
+			rm -rf "$2"
+			mv "$1" "$2"
+		fi
+		7z a "$ROOT_DIR/out/$2-$3.zip" "$2" || return 2
+		rm -rf "$2"
 	popd || return 1
 
 	return 0
 }
 
 for (( i = 0 ; i < MODS ; i++ )); do
-	BRANCH=$($YQ -r ".[$i].branch" manifest.yml)
+	REPO=$($YQ -r ".[$i].repo" "$MANIFEST_PATH")
+	BRANCH=$($YQ -r ".[$i].branch" "$MANIFEST_PATH")
+	TARGET_DIR=$($YQ -r ".[$i].dir" "$MANIFEST_PATH")
+	
+	GAMEDIR=""
+	
+	if [ -n "$TARGET_DIR" ] && [ "$TARGET_DIR" != "null" ]; then
+		OUTPUT_ZIP_NAME="${TARGET_DIR}"
+	else
+		OUTPUT_ZIP_NAME="${BRANCH}"
+	fi
 
-	GAMEDIR="" # expected to be set within build_hlsdk_portable_branch
-
-	pushd hlsdk-portable || exit 1
-	build_hlsdk_portable_branch "$BRANCH"
+	build_mod_source "$REPO" "$BRANCH" "$TARGET_DIR"
 	SUCCESS=$?
-	popd || exit 1
 
 	if [ $SUCCESS -ne 0 ]; then
 		continue
 	fi
 
-	pack_staged_gamedir "$GAMEDIR" "$GH_CPU_OS-$GH_CPU_ARCH"
+	pack_staged_gamedir "$GAMEDIR" "$OUTPUT_ZIP_NAME" "$GH_CPU_OS-$GH_CPU_ARCH"
 done
