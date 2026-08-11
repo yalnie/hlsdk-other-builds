@@ -91,16 +91,24 @@ build_hlsdk_branch()
 {
 	local PATCH PATCHED=false
 
-	# clean the leftovers from patches, keep untracked directories
+	# clean the leftovers from patches & submodules, keep untracked directories
 	git reset --hard -q || return 1
 	git clean -qfd -e build
+	git submodule foreach --recursive git reset --hard -q
+	git submodule foreach --recursive git clean -qfd
+
+	# fetch all remote heads explicitly so checkout origin/<branch> works
+	git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune -q || return 1
 
 	# if exact revision is set, use it, otherwise use the branch
 	if [ -n "$5" ]; then
 		git checkout "$5" || return 1
 	else
-		git checkout "$1" || return 1
+		git checkout "$1" 2>/dev/null || git checkout -b "$1" "origin/$1" || return 1
 	fi
+
+	# synchronize submodules to match the checked-out branch/commit strictly
+	git submodule update --init --recursive --force || return 1
 
 	# apply patches
 	for PATCH in "../patches/$1"/*.patch; do
@@ -184,7 +192,9 @@ for (( i = 0 ; i < MODS ; i++ )); do
 	DL_NAME=$($YQ -r ".[$i].dl_name // \"\"" manifest.yml)
 	MOD_CONFIGURE_OPTS=$($YQ -r ".[$i].configure_opts // \"\"" manifest.yml)
 	MOD_COMMIT=$($YQ -r ".[$i].commit // \"\"" manifest.yml)
-	REPO_DIR=$(basename "$REPO" .git)
+	
+	# generate a clean, collision free directory name for any git/http/ssh URL
+	REPO_DIR=$(echo "$REPO" | sed -E 's|^https?://||; s|^git@||; s|\.git$||; s|[/:]|-|g')
 
 	GAMEDIR=""  # expected to be set within build_hlsdk_branch
 	PACK_NAME="" # ditto, dl_name if set, GAMEDIR otherwise
