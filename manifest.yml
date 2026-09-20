@@ -17,8 +17,6 @@
 - branch: wantedhl
   repo: https://github.com/SiemON-SMX/hlsdk-portable
   dl_name: wantedsp
-- branch: reprocessing
-  repo: https://github.com/SiemON-SMX/hlsdk-portable
 - branch: half_payne
   repo: https://github.com/SiemON-SMX/hlsdk-portable
 - branch: gunmod-updated
