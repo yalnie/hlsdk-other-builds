@@ -22,3 +22,8 @@
 - branch: gunmod-updated
   repo: https://github.com/SiemON-SMX/hlsdk-portable
   dl_name: gunmod
+
+# Mods from nurislamaibekuly
+- branch: main
+  repo: https://github.com/nurislamaibekuly/necos-zpmod
+  dl_name: zpmod
