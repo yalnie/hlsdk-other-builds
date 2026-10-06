@@ -48,9 +48,9 @@ jobs:
             targetarch: armv7hf
 
           # Android systems
-          - os: ubuntu-latest
-            targetos: android
-            targetarch: amd64
+          # - os: ubuntu-latest
+          #   targetos: android
+          #   targetarch: amd64
           - os: ubuntu-latest
             targetos: android
             targetarch: i386
@@ -167,7 +167,6 @@ jobs:
           --repo "$GITHUB_REPOSITORY" \
           --prerelease
         gh release upload --clobber "$RELEASE_TAG" out/manifest.json
-        gh release upload --clobber "$RELEASE_TAG" out/*-android-amd64.zip
         sleep 5s
         gh release upload --clobber "$RELEASE_TAG" out/*-android-arm64.zip
         sleep 5s
